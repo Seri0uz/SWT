@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Wikipedia-Seiten bis zur Philosophie verfolgen.">
+  <title>Philosophen-Wiki</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <header class="header">
+    <a class="brand" href="/" aria-label="Philosophen-Wiki Startseite"><span class="brand-mark" aria-hidden="true">W<span>φ</span></span><strong>Philosophen-Wiki</strong></a>
+  </header>
+  <div class="layout">
+    <main id="main">
+      <h1>Der Weg zur Philosophie</h1>
+      <p class="intro">Anfangswort eingeben, Sprache wählen und Lauf starten.</p>
+      <section id="search" class="search-panel" aria-label="Lauf starten">
+        <form id="run-form">
+          <div class="form-grid">
+            <div class="field"><label for="term">Anfangswort</label><input id="term" name="term" placeholder="z. B. Hund" required maxlength="200" autocomplete="off"></div>
+            <div class="field"><label for="language">Wikipedia-Sprache</label><select id="language" name="language" disabled><option>Wird geladen …</option></select></div>
+            <button id="start" type="submit" disabled>Lauf starten</button>
+          </div>
+        </form>
+        <div class="destination">Zielbegriff: <a id="target" href="https://de.wikipedia.org/wiki/Philosophie" target="_blank" rel="noopener noreferrer">Philosophie ↗</a></div>
+      </section>
+      <section id="journey" class="journey" aria-labelledby="journey-title">
+        <div class="journey-heading"><h2 id="journey-title">Besuchte Seiten</h2><span id="badge" class="badge" data-state="ready">Bereit</span></div>
+        <div class="stats"><div><span>Laufzeit</span><strong id="timer">00:00,0</strong></div><div><span>Schritte</span><strong id="hops">0</strong></div></div>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+        <div id="empty" class="empty"><p>Noch kein Lauf gestartet.</p></div>
+        <ol id="steps" class="steps" aria-label="Besuchte Wikipedia-Artikel"></ol>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

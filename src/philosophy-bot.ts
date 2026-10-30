@@ -4,14 +4,18 @@ import chrome from 'selenium-webdriver/chrome';
 export interface BotConfig {
   startUrl?: string;
   target?: string;
+  /** Maximale Anzahl gefolgter Links; die Anfangsseite zählt als Schritt 0. */
   maxSteps?: number;
   headless?: boolean;
   stepDelayMs?: number;
   highlight?: boolean;
   verbose?: boolean;
+  onStep?: (step: StepRecord) => void;
+  exactTarget?: boolean;
 }
 
 export interface StepRecord {
+  /** Anzahl gefolgter Links seit der Anfangsseite (0). */
   step: number;
   title: string;
   url: string;
@@ -30,7 +34,7 @@ export interface RunResult {
   errorMessage?: string;
 }
 
-const JS_FIND_FIRST_LINK = `
+export const JS_FIND_FIRST_LINK = `
 const parserOutput = document.querySelector('#mw-content-text .mw-parser-output') || document.querySelector('#mw-content-text');
 if (!parserOutput) return null;
 
@@ -56,21 +60,36 @@ for (const p of ps) {
         
         if (node.nodeType === Node.ELEMENT_NODE) {
             // Exclude footnote references, edit buttons, pronunciation audio
-            if (node.matches('sup, sub, .reference, .mw-editsection, .noviewer, audio')) {
+            if (node.matches('sup, sub, .reference, .mw-editsection, .noviewer, audio, .infobox, .hatnote, .toc, .navbox, .thumb, .sidebar, .metadata, .ambox, table')) {
                 return null;
             }
             
+            const style = window.getComputedStyle(node);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+                return null;
+            }
+
             if (node.tagName.toLowerCase() === 'a') {
                 const href = node.getAttribute('href') || '';
-                // Check if internal Wikipedia article (ignore files, help, specials, external, anchors)
-                const isWiki = /^(https?:\\/\\/[a-z]+\\.wikipedia\\.org)?\\/wiki\\/[^:#?]+$/.test(href);
-                const isItalic = Boolean(node.closest('i, em') || window.getComputedStyle(node).fontStyle === 'italic');
-                
-                if (isWiki && !isItalic && parensDepth === 0) {
+                let isWiki = false;
+                try {
+                    const url = new URL(href, location.href);
+                    const article = decodeURIComponent(url.pathname.slice('/wiki/'.length));
+                    isWiki = url.origin === location.origin && url.pathname.startsWith('/wiki/') &&
+                        article.length > 0 && !article.includes(':') && !url.search && !url.hash &&
+                        href.length > 0 && !href.startsWith('#');
+                } catch {
+                    // Ungültige oder fehlerhaft kodierte URLs sind keine Artikel.
+                }
+                const isItalic = Boolean(node.closest('i, em') || /^(italic|oblique)/.test(style.fontStyle));
+                const text = node.textContent.trimStart();
+                const beginsInParens = ['(', '[', '{'].includes(text.charAt(0));
+
+                if (isWiki && !isItalic && parensDepth === 0 && !beginsInParens && text.trim() && node.getClientRects().length) {
                     return node;
                 }
             }
-            
+
             for (const child of node.childNodes) {
                 const res = walk(child);
                 if (res) return res;
@@ -88,16 +107,25 @@ return null;
 export class PhilosophyBot {
   private config: Required<BotConfig>;
 
-  constructor(config: BotConfig = {}) {
+  constructor(config: BotConfig = {}, private readonly driverFactory?: () => Promise<WebDriver>) {
     this.config = {
       startUrl: config.startUrl ?? 'https://de.wikipedia.org/wiki/Bananen',
-      target: config.target ?? 'philosophie',
+      target: (config.target ?? 'philosophie').trim(),
       maxSteps: config.maxSteps ?? 30,
       headless: config.headless ?? false,
       stepDelayMs: config.stepDelayMs ?? (config.headless ? 0 : 1200),
       highlight: config.highlight ?? !config.headless,
       verbose: config.verbose ?? true,
+      onStep: config.onStep ?? (() => {}),
+      exactTarget: config.exactTarget ?? false,
     };
+    if (!Number.isInteger(this.config.maxSteps) || this.config.maxSteps < 0) {
+      throw new Error('maxSteps muss eine nicht negative ganze Zahl sein.');
+    }
+    if (!this.config.target) throw new Error('Der Zielbegriff darf nicht leer sein.');
+    if (!Number.isFinite(this.config.stepDelayMs) || this.config.stepDelayMs < 0) {
+      throw new Error('stepDelayMs muss eine endliche, nicht negative Zahl sein.');
+    }
   }
 
   private log(message: string): void {
@@ -184,14 +212,19 @@ export class PhilosophyBot {
     this.log(`🖥️  Browser-Modus: Chrome (Sichtbar: ${!this.config.headless}) | Pause: ${this.config.stepDelayMs}ms`);
     this.log(`================================================================\n`);
 
-    const driver = await this.buildDriver();
+    let driver: WebDriver | undefined;
 
     try {
+      driver = await (this.driverFactory ? this.driverFactory() : this.buildDriver());
+      await driver.manage().setTimeouts({ pageLoad: 30000, script: 10000 });
       await driver.get(this.config.startUrl);
 
-      for (let step = 1; step <= this.config.maxSteps; step++) {
+      for (let step = 0; step <= this.config.maxSteps; step++) {
         // Auf Wikipedia-Titel warten
         await driver.wait(until.elementLocated(By.id('firstHeading')), 10000);
+        if ((await driver.findElements(By.css('.noarticletext, .mw-noarticletext'))).length) {
+          throw new Error('Der Wikipedia-Artikel existiert nicht.');
+        }
         const headingElement = await driver.findElement(By.id('firstHeading'));
         const title = (await headingElement.getText()).trim();
         const currentUrl = (await driver.getCurrentUrl()).split('#')[0];
@@ -202,6 +235,7 @@ export class PhilosophyBot {
           url: currentUrl,
         };
         steps.push(record);
+        this.config.onStep({ ...record });
 
         this.log(`[Schritt ${step.toString().padStart(2, '0')}] 📄 "${title}"`);
         this.log(`              🔗 ${currentUrl}`);
@@ -212,20 +246,22 @@ export class PhilosophyBot {
         }
 
         // Zielprüfung (z.B. Titel enthält 'philosophie')
-        if (title.toLowerCase().includes(this.config.target.toLowerCase())) {
+        const normalizedTitle = title.normalize('NFC').toLowerCase();
+        const normalizedTarget = this.config.target.normalize('NFC').toLowerCase();
+        if (this.config.exactTarget ? normalizedTitle === normalizedTarget : normalizedTitle.includes(normalizedTarget)) {
           const durationMs = Date.now() - startTime;
           if (this.config.highlight) {
             await this.showBanner(driver, step, title, '🎉 ZIEL ERREICHT! Test bestanden!');
             await this.sleep(2000);
           }
           this.log(`\n🎉 ZIEL ERREICHT! "${title}" enthält "${this.config.target}".`);
-          this.log(`📊 Pfadlänge: ${step} Stationen (${step - 1} Klicks). Dauer: ${(durationMs / 1000).toFixed(2)}s\n`);
+          this.log(`📊 Pfadlänge: ${step} Schritte (${steps.length} Seiten). Dauer: ${(durationMs / 1000).toFixed(2)}s\n`);
           return {
             success: true,
             startUrl: this.config.startUrl,
             targetReached: true,
             steps,
-            totalHops: step - 1,
+            totalHops: step,
             durationMs,
             terminationReason: 'TARGET_REACHED',
           };
@@ -240,13 +276,15 @@ export class PhilosophyBot {
             startUrl: this.config.startUrl,
             targetReached: false,
             steps,
-            totalHops: step - 1,
+            totalHops: step,
             durationMs,
             terminationReason: 'CYCLE_DETECTED',
             errorMessage: `Endlosschleife aufgetreten bei ${currentUrl}`,
           };
         }
         visitedUrls.add(currentUrl);
+
+        if (step === this.config.maxSteps) break;
 
         // Ersten regelkonformen Link suchen
         const nextLinkElement = (await driver.executeScript(JS_FIND_FIRST_LINK)) as WebElement | null;
@@ -259,7 +297,7 @@ export class PhilosophyBot {
             startUrl: this.config.startUrl,
             targetReached: false,
             steps,
-            totalHops: step - 1,
+            totalHops: step,
             durationMs,
             terminationReason: 'NO_VALID_LINK',
             errorMessage: `Kein Folgelink auf Seite ${title} (${currentUrl})`,
@@ -269,7 +307,8 @@ export class PhilosophyBot {
         const linkText = (await nextLinkElement.getText()).trim();
         const linkHref = await nextLinkElement.getAttribute('href');
         record.clickedLinkText = linkText;
-        record.clickedLinkHref = linkHref;
+        record.clickedLinkHref = linkHref ?? undefined;
+        this.config.onStep({ ...record });
 
         this.log(`              👉 Wähle Link: "${linkText}" -> ${linkHref}`);
 
@@ -308,7 +347,7 @@ export class PhilosophyBot {
         startUrl: this.config.startUrl,
         targetReached: false,
         steps,
-        totalHops: this.config.maxSteps,
+        totalHops: Math.max(0, steps.length - 1),
         durationMs,
         terminationReason: 'MAX_STEPS_EXCEEDED',
         errorMessage: `Limit von ${this.config.maxSteps} Schritten erreicht`,
@@ -322,13 +361,15 @@ export class PhilosophyBot {
         startUrl: this.config.startUrl,
         targetReached: false,
         steps,
-        totalHops: steps.length,
+        totalHops: Math.max(0, steps.length - 1),
         durationMs,
         terminationReason: 'ERROR',
         errorMessage: errorMsg,
       };
     } finally {
-      await driver.quit();
+      await driver?.quit().catch((error: unknown) => {
+        this.log(`Browser konnte nicht geschlossen werden: ${String(error)}`);
+      });
     }
   }
 }
