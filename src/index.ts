@@ -1,40 +1,50 @@
-import { PhilosophyBot } from './philosophy-bot';
+import { parseArgs } from 'node:util';
+import { PhilosophyBot, type BotConfig } from './philosophy-bot';
 
-async function main() {
-  const args = process.argv.slice(2);
-  let term = args[0] || 'Bananen';
-  
-  let startUrl = term.startsWith('http')
-    ? term
-    : `https://de.wikipedia.org/wiki/${encodeURIComponent(term)}`;
-
-  const isHeadless = args.includes('--headless');
-  const delay = args.includes('--fast') ? 100 : 1200;
-
-  console.log(`\n🚀 Starte Live-Demo für den Chef...`);
-  console.log(`Browser öffnet sich sichtbar (Chrome) mit Highlight-Effekt!`);
-  console.log(`Startbegriff: ${term}\n`);
-
-  const bot = new PhilosophyBot({
-    startUrl,
-    target: 'philosophie',
-    maxSteps: 35,
-    headless: isHeadless,
-    stepDelayMs: delay,
-    highlight: true,
-    verbose: true,
+export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.env) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      headless: { type: 'boolean' },
+      visible: { type: 'boolean' },
+      show: { type: 'boolean' },
+      help: { type: 'boolean', short: 'h' },
+    },
   });
-
-  const result = await bot.run();
-
-  if (result.success) {
-    console.log(`\n🎉 DEMO ERFOLGREICH: Ziel "${result.steps[result.steps.length - 1].title}" erreicht!`);
-  } else {
-    console.log(`\n⚠️  Demo beendet: ${result.terminationReason}`);
+  if (positionals.length > 1) throw new Error('Bitte genau ein Anfangswort oder eine Wikipedia-URL angeben.');
+  if (values.headless && (values.visible || values.show)) {
+    throw new Error('Bitte entweder --headless oder --visible angeben.');
   }
+  const term = positionals[0] ?? env.START_URL ?? 'Bananen';
+  const headless = values.headless ?? (values.visible || values.show ? false : env.HEADLESS === 'true');
+  const config: BotConfig = {
+    startUrl: /^https?:\/\//.test(term)
+      ? term
+      : `https://de.wikipedia.org/wiki/${encodeURIComponent(term.replaceAll(' ', '_'))}`,
+    headless,
+    highlight: !headless,
+    verbose: true,
+  };
+  return { help: values.help, config };
 }
 
-main().catch((err) => {
-  console.error('Fehler:', err);
-  process.exit(1);
-});
+async function main() {
+  const { help, config } = parseCliArgs(process.argv.slice(2));
+  if (help) {
+    console.log('Aufruf: npm start -- [Anfangswort oder URL] [--headless | --visible]');
+    return;
+  }
+  const result = await new PhilosophyBot(config).run();
+  console.log(`\nErgebnis: ${result.terminationReason}`);
+  console.log(`Schritte: ${result.totalHops} | Laufzeit: ${(result.durationMs / 1000).toFixed(2)} s`);
+  if (result.errorMessage) console.error(result.errorMessage);
+  process.exitCode = result.success ? 0 : 1;
+}
+
+if (require.main === module) {
+  main().catch(error => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

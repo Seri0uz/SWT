@@ -7,7 +7,7 @@ import type { BotConfig, RunResult } from './philosophy-bot';
 function result(config: BotConfig): RunResult {
   return {
     success: true, startUrl: config.startUrl!, targetReached: true,
-    steps: [{ step: 0, title: config.target!, url: config.startUrl! }],
+    steps: [{ step: 0, title: 'Philosophy', url: config.startUrl! }],
     totalHops: 0, durationMs: 120, terminationReason: 'TARGET_REACHED',
   };
 }
@@ -42,11 +42,10 @@ test('GUI liefert Dateien, validiert Eingaben und streamt sprachabhängige Bot-E
   const response = await post({ term: ' Albert Einstein ', language: 'en' });
   assert.equal(response.status, 200);
   const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
-  assert.deepEqual(events.map(event => event.type), ['started', 'step', 'result']);
-  assert.equal(events[2].data.success, true);
+  assert.deepEqual(events.map(event => event.type), ['step', 'result']);
+  assert.equal(events[1].data.success, true);
   assert.equal(calls[0].startUrl, 'https://en.wikipedia.org/wiki/Albert_Einstein');
-  assert.equal(calls[0].target, 'Philosophy');
-  assert.equal(calls[0].exactTarget, false);
+  assert.equal(languages.en.targetUrl, 'https://en.wikipedia.org/wiki/Philosophy');
   assert.equal(calls[0].headless, true);
 });
 

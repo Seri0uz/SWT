@@ -2,16 +2,8 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { PhilosophyBot, type BotConfig, type RunResult } from './philosophy-bot';
-
-export const languages = {
-  de: { label: 'Deutsch', target: 'Philosophie' },
-  en: { label: 'English', target: 'Philosophy' },
-  fr: { label: 'Français', target: 'Philosophie' },
-  it: { label: 'Italiano', target: 'Filosofia' },
-  es: { label: 'Español', target: 'Filosofía' },
-  pt: { label: 'Português', target: 'Filosofia' },
-  nl: { label: 'Nederlands', target: 'Filosofie' },
-};
+import { languages } from './wiki-targets';
+export { languages } from './wiki-targets';
 
 type Runner = (config: BotConfig) => Promise<RunResult>;
 const publicDirectory = resolve(__dirname, '../web');
@@ -81,25 +73,18 @@ export function createGuiServer(run: Runner = config => new PhilosophyBot(config
           if (!response.destroyed) response.write(JSON.stringify({ type, data }) + '\n');
         };
         const startedAt = Date.now();
-        const heartbeat = setInterval(() => emit('heartbeat', { elapsedMs: Date.now() - startedAt }), 5000);
         try {
-          emit('started', { startedAt });
           const result = await run({
             startUrl: `https://${language}.wikipedia.org/wiki/${encodeURIComponent(term.replaceAll(' ', '_'))}`,
-            target: languages[language as keyof typeof languages].target,
-            exactTarget: false,
             headless: true,
             highlight: false,
             verbose: false,
-            maxSteps: 100,
-            stepDelayMs: 200,
             onStep: step => emit('step', step),
           });
           emit('result', result);
         } catch (error) {
           emit('error', { message: error instanceof Error ? error.message : String(error), durationMs: Date.now() - startedAt });
         } finally {
-          clearInterval(heartbeat);
           running = false;
           response.end();
         }

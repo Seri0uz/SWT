@@ -1,150 +1,105 @@
-# SWT Übung: Testautomatisierung mit Selenium WebDriver & TypeScript
+# Philosophen-Wiki
 
-> **Hochschule Luzern (HSLU) – Modul SWT**  
-> **Projekt:** Testautomat für das Spiel «Philosophen-Wiki» (Getting to Philosophy)  
-> **Browser:** Google Chrome (Selenium WebDriver)
+Selenium-Bot mit TypeScript und Google Chrome für «Getting to Philosophy».
+Er folgt dem ersten gültigen Link im Artikeltext bis zum festen Philosophie-Artikel
+der gewählten Wikipedia-Sprache.
 
----
+## Installation und Start
 
-## Weboberfläche
+Voraussetzungen: Node.js und Google Chrome.
 
 ```bash
+npm install
 npm run gui
 ```
 
-Danach **http://127.0.0.1:3000** im Browser öffnen. Anfangswort eingeben,
-Wikipedia-Sprache wählen und **Lauf starten** anklicken. Die Oberfläche zeigt die
-Seitenfolge live, die Laufzeit, die Anzahl gefolgter Links (Schritte). Jeder Artikel
-lässt sich in einem neuen Tab öffnen. Unterstützt werden Deutsch, Englisch,
-Französisch, Italienisch, Spanisch, Portugiesisch und Niederländisch; das Ziel
-wird passend zur Sprache gewählt. Wie beim CLI-Lauf genügt es, wenn der
-Artikeltitel den Zielbegriff enthält (z. B. «Objekt (Philosophie)»).
+Die Oberfläche unter [127.0.0.1:3000](http://127.0.0.1:3000) öffnen.
+Anfangswort eingeben, Sprache wählen und den Lauf starten. Angezeigt werden
+Seitenfolge, gefolgte Links und Laufzeit. Mit `Ctrl+C` den Server beenden.
+Ein anderer Port ist mit `PORT=3001 npm run gui` möglich.
 
-Voraussetzungen: Node.js, die Projekt-Abhängigkeiten (`npm install`) und Google
-Chrome für den bestehenden Selenium-Bot. Es ist keine separate GUI-Installation
-und kein Frontend-Build nötig. Selenium kann beim ersten Start einen passenden
-ChromeDriver herunterladen; dafür ist Internetzugriff nötig. Der Server ist nur
-lokal erreichbar. Mit `Ctrl+C` beenden. Einen anderen Port wählt man mit
-`PORT=3001 npm run gui`.
+Der Server ist nur lokal erreichbar und führt höchstens einen Lauf gleichzeitig
+aus. Ein gestarteter Lauf läuft auch nach dem Schliessen des Tabs bis zu seinem
+Abbruchpunkt weiter.
 
-Ein Lauf endet beim Ziel, einer Schleife, einer Sackgasse, einem Fehler oder nach
-100 Schritten. Es läuft höchstens ein Bot gleichzeitig. Beim Schliessen des Tabs
-läuft ein gestarteter Bot bis zu einem dieser Abbruchpunkte weiter.
+## Spielregeln
 
-Prüfung der lokalen Serverlogik ohne Wikipedia-Zugriff: `npm run test:gui`.
+Der Bot berücksichtigt Links in Absätzen des Artikeltexts. Ausgeschlossen sind:
 
-## Wörter aus einer TXT-Datei ausführen
+- Links in Klammern oder Kursivschrift.
+- Versteckte Links, Fussnoten, Infoboxen, Tabellen und Navigationshinweise.
+- Externe Links, andere Wikipedia-Sprachen, Namensräume, Abfragen und Fragmente.
+
+Als Erfolg zählt ausschliesslich die fest hinterlegte Zieladresse der Startsprache,
+z. B. `https://de.wikipedia.org/wiki/Philosophie` oder
+`https://en.wikipedia.org/wiki/Philosophy`. «Objekt (Philosophie)» genügt nicht.
+Unterstützt sind Deutsch, Englisch, Französisch, Italienisch, Spanisch,
+Portugiesisch und Niederländisch. Die Adressen stehen in `src/wiki-targets.ts`.
+
+Die Anfangsseite zählt als Schritt 0. Ein Schritt entspricht einem gefolgten Link.
+Alle Einstiege erlauben standardmässig höchstens 100 Schritte. Ein Ziel auf dem
+letzten erlaubten Schritt zählt als Erfolg. Weitere Abbruchgründe sind eine
+Schleife, kein gültiger Folgelink, eine Zugriffsbegrenzung oder ein Browserfehler.
+
+## Einzelnen Lauf ausführen
+
+```bash
+npm start -- Hund
+npm start -- --headless "Albert Einstein"
+npm start -- https://en.wikipedia.org/wiki/Dog --headless
+```
+
+Ohne `--headless` öffnet sich ein sichtbarer Browser mit Banner und Hervorhebung.
+Die Pause von 1,2 Sekunden hilft beim Mitverfolgen. Headless-Läufe und die GUI
+arbeiten ohne künstliche Pause. `npm run demo` ist ein Alias für den sichtbaren
+CLI-Einstieg. Weitere Optionen zeigt `npm start -- --help`.
+
+Chrome lädt keine Bilder. CSS und JavaScript bleiben für die Auswertung der
+Linkregeln aktiv. Der Browser identifiziert sich als `SWTPhilosophyBot/1.0` mit
+Projektlink entsprechend der [Wikimedia User-Agent Policy](https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy).
+Bei einer Wikimedia-Fehlerseite mit «429 – Too many requests» beendet der Bot den
+Lauf ohne automatische Wiederholungen. Die Antwort allein zeigt nicht, ob die
+Anfragenzahl oder die Client-Kennung ausschlaggebend ist.
+
+## Wörter aus einer TXT-Datei verarbeiten
 
 ```bash
 npm run batch -- woerter.txt
+npm run batch -- "meine woerter.txt" meine-loesungen.csv
 ```
 
-Die Datei enthält einen Artikeltitel pro Zeile, zum Beispiel:
+Ein deutscher Artikeltitel pro Zeile; Leerzeilen werden ignoriert. Für jedes Wort
+erscheint eine tabulatorgetrennte Ergebniszeile im Terminal. Zusätzlich wird eine
+UTF-8-CSV mit den Spalten `Wort,Schritte,Zeit (s),Status` geschrieben. Zeiten haben
+einen Dezimalpunkt. Standardausgabe ist `loesungen.csv`; vorhandene Ausgabedateien
+werden überschrieben. Die generierte Standarddatei wird nicht versioniert.
 
-```text
-Hund
-Philosophie
-```
+Die Wörter laufen nacheinander. Einzelne Fehler verhindern die übrigen Läufe
+nicht. Nach einer Wikimedia-Zugriffsbegrenzung werden die restlichen Wörter als
+«Nicht ausgeführt (Anfragelimit)» protokolliert, ohne weitere Seiten abzurufen.
+Nicht ausgeführte oder nicht messbare Schritte erscheinen als `–`.
+Fehlerdetails stehen separat im Terminal. Exit-Code 0 bedeutet, dass alle Wörter
+das Ziel erreicht haben; andernfalls wird Exit-Code 1 zurückgegeben.
 
-Zusätzlich wird **loesungen.csv** im aktuellen Verzeichnis erstellt (eine vorhandene
-Datei wird überschrieben). Ein eigener Ausgabepfad ist optional:
-
-```bash
-npm run batch -- woerter.txt meine-loesungen.csv
-```
-
-Die CSV enthält die Spalten `Wort,Schritte,Zeit (s),Status`, verwendet Kommas als
-Trennzeichen und UTF-8. Zeiten haben einen Dezimalpunkt.
-
-Für jedes Wort erscheint eine Ergebniszeile mit **Schritten**, **Zeit in Sekunden**
-und **Status**. Schritte sind die gefolgten Links; die Anfangsseite zählt als 0.
-Beispiel: 11 besuchte Seiten entsprechen 10 Schritten. Die Zeit wird für jeden Lauf separat
-gemessen. Die Wörter werden nacheinander auf der deutschen Wikipedia verarbeitet,
-ohne sichtbares Browserfenster. Leerzeilen werden ignoriert. Ein Titel darf aus
-mehreren Wörtern bestehen. Zielerkennung und Schrittlimit entsprechen der GUI.
-
-Dateipfade mit Leerzeichen in Anführungszeichen setzen. Optional die Ergebnisse
-als tabulatorgetrennte Textdatei speichern:
-
-```bash
-npm run --silent batch -- "meine woerter.txt" > ergebnisse.txt
-```
-
-Fehlerdetails erscheinen separat im Terminal. Nach einem fehlgeschlagenen Lauf
-werden die übrigen Wörter trotzdem verarbeitet. Exit-Code 0 bedeutet, dass alle
-Wörter das Ziel erreicht haben; andernfalls wird Exit-Code 1 zurückgegeben.
-
-## 🚀 Ausführung
-
-### 1. Test im sichtbaren Browser anzeigen (Live-Klicks & Highlights)
-Öffnet Google Chrome als echtes Fenster. Eine Infoleiste oben zeigt die aktuelle Seite, der Automat scrollt sanft zum gewählten Link, hebt ihn **leuchtend gelb/rot** hervor, pausiert kurz und klickt ihn an:
-```bash
-npm run test:visible
-```
-*(Oder alternativ über den Demo-Befehl: `npm run demo`)*
-
-### 2. Schneller Hintergrund-Test (Headless)
-Führt den Test ohne sichtbares Fenster blitzschnell im Hintergrund aus (z.B. für CI/CD Pipelines):
-```bash
-npm test
-```
-
-### 3. Beliebige Startbegriffe ausprobieren
-```bash
-npx tsx src/index.ts "Albert_Einstein"
-npx tsx src/index.ts "Kaffee"
-npx tsx src/index.ts "Schweiz"
-```
-
----
-
-## Automatisierte Prüfungen
+## Prüfen
 
 ```bash
 npm run build
-npm run test:all
+npm test
 ```
 
-Die Tests prüfen die tatsächliche Linkauswahl mit Selenium/Chrome gegen lokale,
-kontrollierte HTML-Seiten. Dadurch hängen die erwarteten Ergebnisse nicht von
-Wikipedia-Änderungen ab. Abgedeckt sind Klammern, Kursivschrift, ausgeblendete
-Links, Fussnoten, Infoboxen, URL-Filter und Sprachtreue sowie Zielerkennung,
-Weiterleitungen, Schleifen, Sackgassen, Schrittlimits und Browserfehler.
-Hinzu kommen Tests für GUI-Schnittstelle, TXT-Dateien, CSV-Escaping und CLI-Fehler.
-Chrome/ChromeDriver müssen verfügbar sein; Selenium kann sie beim ersten Lauf
-herunterladen. Die Testseiten selbst benötigen keinen Wikipedia-Zugriff.
+`npm test` führt die automatisierten Tests gegen lokale Testseiten aus. Geprüft
+werden Linkregeln, feste Zieladressen, Abbruchgründe, Browser-Konfiguration,
+CLI-Argumente, Batch-Ausgabe sowie Server und Oberfläche. Chrome muss verfügbar
+sein. Selenium kann beim ersten Start einen passenden ChromeDriver herunterladen;
+dafür ist Internetzugriff nötig. Die Testseiten benötigen keinen Wikipedia-Zugriff.
 
-Nur die Spielregeln: `npm run test:rules`. Der bestehende Befehl `npm test`
-bleibt der echte Wikipedia-Lauf. Dessen Pfad und Laufzeit können sich ändern.
+Ein echter Wikipedia-Lauf wird ausdrücklich separat gestartet:
 
-Die Projektregel ist bewusst: Jeder Artikeltitel mit «Philosophie» zählt als
-Ziel, also auch «Objekt (Philosophie)». Ein Schritt ist ein gefolgter Link. Die
-Anfangsseite zählt als 0; n Schritte erlauben höchstens n+1 besuchte Seiten.
-Ein Ziel auf dem n-ten Schritt zählt noch als Erfolg.
-
-## 🎯 Spielregeln («Getting to Philosophy»)
-
-1. Eine beliebige Wikipedia-Seite aufrufen (z.B. `Bananen`).
-2. Den **ersten Link** im Artikeltext auswählen, der:
-   - **nicht kursiv** ist (weder `<i>`, `<em>` noch CSS `font-style: italic`),
-   - **nicht in Klammern** steht (z.B. runde `(...)` oder eckige `[...]` Klammern).
-3. Fussnoten/Einzelnachweise (`[1]`, `[2]`), Infoboxen, Tabellen, Navigationsleisten und Spezialseiten (`Hilfe:`, `Datei:`) werden ignoriert.
-4. Den Link anklicken und den Vorgang wiederholen, bis:
-   - die Seite **PHILOSOPHIE** (oder ein Titel mit «Philosophie») erreicht wird, oder
-   - ein Zyklus (Endlosschleife) erkannt wird, oder
-   - das Schrittlimit $n$ (Standard: 30) erreicht ist.
-
----
-
-## 📂 Projektstruktur
-
+```bash
+npm run test:live
+npm run test:visible
 ```
-├── src/
-│   ├── philosophy-bot.ts   # Kernlogik des Selenium-Testautomaten (DOM-Traversal, Klammer-Stack, Filter, Banner)
-│   ├── test.ts             # Test-Runner für `npm test` und `npm run test:visible`
-│   └── index.ts            # CLI & Demo-Einstiegspunkt für freie Begriffswahl
-├── CHEF_REPORT.md          # Umfassender Management-Report (Tool-Vergleich, Kosten, Fallen, Rollen)
-├── package.json            # npm Konfiguration & Scripts
-├── tsconfig.json           # TypeScript Konfiguration
-└── README.md               # Dokumentation
-```
+
+Standardstart ist «Bananen». Optional: `START_URL=https://de.wikipedia.org/wiki/Hund`.
+Die aktuelle Wikipedia-Seitenfolge und Laufzeit sind keine festen Testerwartungen.

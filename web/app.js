@@ -7,7 +7,7 @@ const status = document.querySelector('#status');
 const badge = document.querySelector('#badge');
 const steps = document.querySelector('#steps');
 const empty = document.querySelector('#empty');
-const rows = new Map();
+const hops = document.querySelector('#hops');
 let languages = {};
 let running = false;
 let startedAt = 0;
@@ -27,39 +27,35 @@ function updateLanguage() {
   const target = languages[code].target;
   const link = document.querySelector('#target');
   link.textContent = `${target} ↗`;
-  link.href = `https://${code}.wikipedia.org/wiki/${encodeURIComponent(target)}`;
+  link.href = languages[code].targetUrl;
 }
 function showStep(step) {
   empty.hidden = true;
-  let row = rows.get(step.step);
-  if (!row) {
-    row = document.createElement('li');
-    const number = document.createElement('span');
-    number.className = 'step-number';
-    number.textContent = step.step;
-    const content = document.createElement('div');
-    content.className = 'step-content';
-    const link = document.createElement('a');
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    const detail = document.createElement('small');
-    content.append(link, detail);
-    row.append(number, content);
-    rows.set(step.step, row);
-    steps.append(row);
-  }
-  const link = row.querySelector('a');
+  const row = document.createElement('li');
+  const number = document.createElement('span');
+  number.className = 'step-number';
+  number.textContent = step.step;
+  const content = document.createElement('div');
+  content.className = 'step-content';
+  const link = document.createElement('a');
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
   const url = new URL(step.url);
   if (url.protocol === 'https:' && /^[a-z]+\.wikipedia\.org$/.test(url.hostname)) link.href = url.href;
   link.textContent = `${step.title} ↗`;
-  row.querySelector('small').textContent = step.clickedLinkText ? `Nächster Link: ${step.clickedLinkText}` : (step.step === 0 ? 'Anfangsartikel · 0 Schritte' : 'Artikel erreicht');
-  document.querySelector('#hops').textContent = Math.max(0, rows.size - 1);
+  const detail = document.createElement('small');
+  detail.textContent = step.clickedLinkText ? `Nächster Link: ${step.clickedLinkText}` : 'Artikel erreicht';
+  content.append(link, detail);
+  row.append(number, content);
+  steps.append(row);
+  hops.textContent = step.step;
 }
 const outcomes = {
-  TARGET_REACHED: ['Ziel erreicht', 'success', 'Ein Artikel mit dem Zielbegriff wurde erreicht.'],
+  TARGET_REACHED: ['Ziel erreicht', 'success', 'Die feste Zieladresse der gewählten Sprache wurde erreicht.'],
+  RATE_LIMITED: ['Wikipedia begrenzt Zugriffe', 'warning', ''],
   CYCLE_DETECTED: ['Schleife erkannt', 'warning', 'Ein Artikel wurde erneut besucht. Der Lauf wurde beendet.'],
   NO_VALID_LINK: ['Sackgasse', 'warning', 'Kein gültiger Folgelink gefunden.'],
-  MAX_STEPS_EXCEEDED: ['Schrittlimit erreicht', 'warning', 'Nach 100 Schritten beendet. Das Ziel wurde nicht erreicht.'],
+  MAX_STEPS_EXCEEDED: ['Schrittlimit erreicht', 'warning', 'Das Schrittlimit wurde erreicht. Das Ziel wurde nicht erreicht.'],
   ERROR: ['Lauf fehlgeschlagen', 'error', 'Der Lauf konnte nicht abgeschlossen werden.'],
 };
 form.addEventListener('submit', async event => {
@@ -73,10 +69,9 @@ form.addEventListener('submit', async event => {
   running = true;
   term.disabled = language.disabled = start.disabled = true;
   start.textContent = 'Läuft …';
-  rows.clear();
   steps.replaceChildren();
   empty.hidden = true;
-  document.querySelector('#hops').textContent = '0';
+  hops.textContent = '0';
   startedAt = performance.now();
   timer.textContent = formatDuration(0);
   clock = setInterval(() => timer.textContent = formatDuration(performance.now() - startedAt), 100);
@@ -102,11 +97,10 @@ form.addEventListener('submit', async event => {
         finished = true;
         clearInterval(clock);
         timer.textContent = formatDuration(event.data.durationMs);
-        event.data.steps.forEach(showStep);
-        document.querySelector('#hops').textContent = event.data.totalHops;
+        hops.textContent = event.data.totalHops;
         const outcome = outcomes[event.data.terminationReason] || outcomes.ERROR;
         state(...outcome);
-        if (event.data.terminationReason === 'ERROR') status.textContent += ` ${event.data.errorMessage || ''} Prüfe die Internetverbindung und ob Google Chrome installiert ist.`;
+        if (['ERROR', 'RATE_LIMITED'].includes(event.data.terminationReason)) status.textContent += ` ${event.data.errorMessage || ''}`;
         const last = steps.lastElementChild;
         if (last) {
           last.querySelector('small').textContent = event.data.success ? 'Zielartikel erreicht' : 'Hier endet dieser Lauf';
@@ -135,7 +129,7 @@ form.addEventListener('submit', async event => {
     running = false;
     term.disabled = language.disabled = start.disabled = false;
     start.replaceChildren(document.createTextNode('Lauf starten'));
-    if (!rows.size) {
+    if (!steps.childElementCount) {
       empty.querySelector('p').textContent = 'Keine Seiten besucht.';
       empty.hidden = false;
     }

@@ -4,8 +4,8 @@
   "description": "SWT Übung Testautomatisierung - Wikipedia Getting to Philosophy mit Selenium WebDriver in TypeScript",
   "main": "dist/index.js",
   "scripts": {
-    "test": "tsx src/test.ts",
-    "test:visible": "tsx src/test.ts --visible",
+    "test": "tsx --test src/*.test.ts",
+    "test:visible": "tsx src/index.ts --visible",
     "demo": "tsx src/index.ts",
     "build": "tsc",
     "start": "tsx src/index.ts",
@@ -14,7 +14,8 @@
     "batch": "tsx src/batch.ts",
     "test:batch": "tsx --test src/batch.test.ts",
     "test:rules": "tsx --test src/philosophy-bot.test.ts",
-    "test:all": "tsx --test src/*.test.ts"
+    "test:all": "npm test",
+    "test:live": "tsx src/index.ts --headless"
   },
   "keywords": [
     "selenium",

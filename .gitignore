@@ -86,3 +86,6 @@ ehthumbs_vista.db
 tmp/
 temp/
 *.tmp
+
+# Generierte Batch-Ergebnisse
+loesungen.csv

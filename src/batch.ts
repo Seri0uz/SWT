@@ -11,12 +11,22 @@ const statuses: Record<RunResult['terminationReason'], string> = {
   CYCLE_DETECTED: 'Schleife erkannt',
   MAX_STEPS_EXCEEDED: 'Seitenlimit erreicht',
   NO_VALID_LINK: 'Kein Folgelink',
+  RATE_LIMITED: 'Anfragelimit erreicht',
   ERROR: 'Fehler',
 };
+export interface BatchRow {
+  word: string;
+  hops: number | null;
+  durationMs: number;
+  status: string;
+}
+
+const header = ['Wort', 'Schritte', 'Zeit (s)', 'Status'];
+const fields = (row: BatchRow) => [row.word, row.hops?.toString() ?? '–', (row.durationMs / 1000).toFixed(2), row.status];
 const cell = (value: string) => value.replace(/[\x00-\x1f\x7f]/g, ' ');
 
-export function toCsv(lines: string[]): string {
-  return lines.map(line => line.split('\t').map(value =>
+export function toCsv(rows: BatchRow[]): string {
+  return [header, ...rows.map(fields)].map(values => values.map(value =>
     /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value,
   ).join(',')).join('\r\n') + '\r\n';
 }
@@ -27,32 +37,38 @@ export async function runBatch(
   run: Runner = config => new PhilosophyBot(config).run(),
   output: (line: string) => void = console.log,
   reportError: (line: string) => void = console.error,
-): Promise<boolean> {
-  output('Wort\tSchritte\tZeit (s)\tStatus');
-  let successful = true;
+): Promise<{ success: boolean; rows: BatchRow[] }> {
+  const rows: BatchRow[] = [];
+  const addRow = (row: BatchRow) => {
+    rows.push(row);
+    output(fields(row).map(cell).join('\t'));
+  };
+  output(header.join('\t'));
+  let success = true;
+  let rateLimited = false;
   for (const word of words) {
+    if (rateLimited) {
+      addRow({ word, hops: null, durationMs: 0, status: 'Nicht ausgeführt (Anfragelimit)' });
+      continue;
+    }
     const startedAt = Date.now();
     try {
       const result = await run({
         startUrl: `https://de.wikipedia.org/wiki/${encodeURIComponent(word.replaceAll(' ', '_'))}`,
-        target: 'Philosophie',
-        exactTarget: false,
-        maxSteps: 100,
         headless: true,
-        highlight: false,
         verbose: false,
-        stepDelayMs: 0,
       });
-      output(`${cell(word)}\t${result.totalHops}\t${(result.durationMs / 1000).toFixed(2)}\t${statuses[result.terminationReason]}`);
-      if (!result.success) successful = false;
+      addRow({ word, hops: result.totalHops, durationMs: result.durationMs, status: statuses[result.terminationReason] });
+      if (!result.success) success = false;
+      if (result.terminationReason === 'RATE_LIMITED') rateLimited = true;
       if (result.errorMessage) reportError(`${cell(word)}: ${cell(result.errorMessage)}`);
     } catch (error) {
-      successful = false;
-      output(`${cell(word)}\t–\t${((Date.now() - startedAt) / 1000).toFixed(2)}\tFehler`);
+      success = false;
+      addRow({ word, hops: null, durationMs: Date.now() - startedAt, status: 'Fehler' });
       reportError(`${cell(word)}: ${cell(error instanceof Error ? error.message : String(error))}`);
     }
   }
-  return successful;
+  return { success, rows };
 }
 
 async function main() {
@@ -75,14 +91,10 @@ async function main() {
   }
   const words = parseWords(text);
   if (!words.length) throw new Error('Die Datei enthält keine Anfangswörter.');
-  const lines: string[] = [];
-  const successful = await runBatch(words, undefined, line => {
-    console.log(line);
-    lines.push(line);
-  });
-  await writeFile(outputPath, toCsv(lines), 'utf8');
+  const result = await runBatch(words);
+  await writeFile(outputPath, toCsv(result.rows), 'utf8');
   console.error(`CSV gespeichert: ${outputPath}`);
-  if (!successful) process.exitCode = 1;
+  if (!result.success) process.exitCode = 1;
 }
 
 if (require.main === module) {

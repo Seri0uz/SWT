@@ -2,23 +2,27 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { Builder, type WebDriver, type WebElement } from 'selenium-webdriver';
-import chrome from 'selenium-webdriver/chrome';
-import { PhilosophyBot, JS_FIND_FIRST_LINK, type BotConfig, type StepRecord } from './philosophy-bot';
+import { type WebDriver, type WebElement } from 'selenium-webdriver';
+import { PhilosophyBot, type BotConfig, type StepRecord } from './philosophy-bot';
+import { JS_FIND_FIRST_LINK } from './wiki-links';
+import { createWikiDriver } from './wiki-browser';
+import { showBanner } from './browser-visuals';
 
 const link = (href: string, text = 'Link') => `<a href="${href}">${text}</a>`;
-const pages: Record<string, { title: string; body: string; redirect?: string }> = {
+const pages: Record<string, { title: string; body: string; redirect?: string; raw?: boolean }> = {
   Start: { title: 'Anfang', body: `<p>${link('/wiki/Middle')}</p>` },
-  Middle: { title: 'Mitte', body: `<p>${link('/wiki/Target')}</p>` },
+  Middle: { title: 'Mitte', body: `<p>${link('/wiki/Philosophie')}</p>` },
+  Philosophie: { title: 'Philosophie', body: '' },
   Target: { title: 'Objekt (Philosophie)', body: `<p>${link('/wiki/Never')}</p>` },
-  Exact: { title: 'Philosophie', body: '' },
+  Exact: { title: '', body: '', redirect: '/wiki/Philosophie' },
   Unicode: { title: 'FILOSOFI\u0301A', body: '' },
   CycleA: { title: 'A', body: `<p>${link('/wiki/CycleB')}</p>` },
   CycleB: { title: 'B', body: `<p>${link('/wiki/CycleA')}</p>` },
   Self: { title: 'Selbst', body: `<p>${link('/wiki/Self')}</p>` },
   Dead: { title: 'Sackgasse', body: `<p><i>${link('/wiki/Exact')}</i></p>` },
-  Alias: { title: '', body: '', redirect: '/wiki/Target' },
+  Alias: { title: '', body: '', redirect: '/wiki/Philosophie' },
   Missing: { title: 'Philosophie fehlt', body: '<div class="noarticletext">Dieser Artikel existiert nicht.</div>' },
+  Limited: { title: 'Wikimedia Error', body: 'Error Too many requests. Error: 429', raw: true },
 };
 const requests: string[] = [];
 const server = createServer((request, response) => {
@@ -27,7 +31,9 @@ const server = createServer((request, response) => {
   const page = pages[name] ?? { title: 'Fixture', body: '' };
   if (page.redirect) { response.writeHead(302, { Location: page.redirect }); response.end(); return; }
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  response.end(`<!doctype html><meta charset="utf-8"><h1 id="firstHeading">${page.title}</h1><div id="mw-content-text"><div class="mw-parser-output">${page.body}</div></div>`);
+  response.end(page.raw
+    ? `<!doctype html><meta charset="utf-8"><title>${page.title}</title><p>${page.body}</p>`
+    : `<!doctype html><meta charset="utf-8"><h1 id="firstHeading">${page.title}</h1><div id="mw-content-text"><div class="mw-parser-output">${page.body}</div></div>`);
 });
 let base: string;
 let driver: WebDriver;
@@ -35,9 +41,7 @@ let cleanups = 0;
 before(async () => {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const options = new chrome.Options();
-  options.addArguments('--headless=new', '--no-sandbox');
-  driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
+  driver = await createWikiDriver(true);
 });
 after(async () => {
   await driver?.quit();
@@ -84,16 +88,26 @@ test('Linkregel: fehlender Artikelcontainer', async () => {
   assert.equal(await driver.executeScript(JS_FIND_FIRST_LINK), null);
 });
 
+test('Demo-Banner behandelt Titel und Linktext als Text, nicht als HTML', async () => {
+  await driver.get(`${base}/wiki/Fixture`);
+  const title = '<img src="/unexpected" onerror="window.injected = true">';
+  await showBanner(driver, 0, title, '<b>Link</b>');
+  assert.equal(await driver.executeScript('return document.querySelector("#swt-test-banner").textContent'), `Schritt 0 · ${title} · <b>Link</b>`);
+  assert.equal(await driver.executeScript('return document.querySelector("#swt-test-banner").children.length'), 0);
+});
+
 async function run(name: string, config: BotConfig = {}) {
   const cleanupBefore = cleanups;
   const shared = new Proxy(driver, {
     get(target, key) {
+      if (key === 'get') return async (url: string) => target.get(url.replace('https://de.wikipedia.org', base));
+      if (key === 'getCurrentUrl') return async () => (await target.getCurrentUrl()).replace(base, 'https://de.wikipedia.org');
       if (key === 'quit') return async () => { cleanups++; };
       const value = Reflect.get(target, key);
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  const result = await new PhilosophyBot({ startUrl: `${base}/wiki/${name}`, headless: true, verbose: false, maxSteps: 10, ...config }, async () => shared).run();
+  const result = await new PhilosophyBot({ startUrl: `https://de.wikipedia.org/wiki/${name}`, headless: true, verbose: false, maxSteps: 10, stepDelayMs: 0, ...config }, async () => shared).run();
   assert.equal(cleanups, cleanupBefore + 1, 'Browser wird für jedes Ergebnis freigegeben');
   assert.ok(Number.isFinite(result.durationMs) && result.durationMs >= 0);
   assert.equal(result.totalHops, Math.max(0, result.steps.length - 1));
@@ -104,8 +118,8 @@ test('Ablauf: Ziel nach drei Seiten; Live-Ereignisse entsprechen dem Ergebnis', 
   const result = await run('Start', { onStep: step => events.push(step) });
   assert.equal(result.terminationReason, 'TARGET_REACHED');
   assert.equal(result.success, true);
-  assert.deepEqual(result.steps.map(step => step.title), ['Anfang', 'Mitte', 'Objekt (Philosophie)']);
-  assert.deepEqual([...new Map(events.map(step => [step.step, step])).values()], result.steps);
+  assert.deepEqual(result.steps.map(step => step.title), ['Anfang', 'Mitte', 'Philosophie']);
+  assert.deepEqual(events, result.steps);
 });
 test('Ablauf: Anfangsseite ist bereits das Ziel', async () => {
   const result = await run('Exact');
@@ -113,8 +127,8 @@ test('Ablauf: Anfangsseite ist bereits das Ziel', async () => {
   assert.equal(result.steps.length, 1);
   assert.equal(result.totalHops, 0);
 });
-test('Ablauf: Unicode und Gross-/Kleinschreibung', async () => assert.equal((await run('Unicode', { target: 'Filosofía' })).success, true));
-test('Ablauf: exakter Zielmodus akzeptiert keinen Teilbegriff', async () => assert.equal((await run('Target', { exactTarget: true, maxSteps: 1 })).success, false));
+test('Ablauf: fremder Titel ist kein Ziel', async () => assert.equal((await run('Unicode')).success, false));
+test('Ablauf: Philosophie als Teilbegriff ist kein Ziel', async () => assert.equal((await run('Target', { maxSteps: 0 })).success, false));
 test('Ablauf: A-B-A-Schleife', async () => {
   const result = await run('CycleA');
   assert.equal(result.terminationReason, 'CYCLE_DETECTED');
@@ -131,7 +145,7 @@ test('Ablauf: Limit ohne zusätzlichen Klick', async () => {
   const result = await run('Start', { maxSteps: 1 });
   assert.equal(result.terminationReason, 'MAX_STEPS_EXCEEDED');
   assert.equal(result.steps.length, 2);
-  assert.equal(requests.includes('Target'), false);
+  assert.equal(requests.includes('Philosophie'), false);
 });
 test('Ablauf: Ziel nach exakt n Schritten zählt als Erfolg', async () => {
   const result = await run('Start', { maxSteps: 2 });
@@ -143,12 +157,22 @@ test('Ablauf: Weiterleitung zählt nicht als zusätzliche Seite', async () => {
   const result = await run('Alias');
   assert.equal(result.success, true);
   assert.equal(result.steps.length, 1);
-  assert.equal(result.steps[0].url, `${base}/wiki/Target`);
+  assert.equal(result.steps[0].url, 'https://de.wikipedia.org/wiki/Philosophie');
 });
 test('Ablauf: nicht vorhandener Artikel ist kein Ziel', async () => {
   const result = await run('Missing');
   assert.equal(result.success, false);
   assert.equal(result.terminationReason, 'ERROR');
+});
+test('Ablauf: Wikimedia-429 wird als Anfragelimit erkannt, ohne weitere Navigation', async () => {
+  requests.length = 0;
+  const result = await run('Limited');
+  assert.equal(result.terminationReason, 'RATE_LIMITED');
+  assert.equal(result.success, false);
+  assert.equal(result.steps.length, 0);
+  assert.match(result.errorMessage!, /429/);
+  assert.match(result.errorMessage!, /pausieren/);
+  assert.deepEqual(requests.filter(name => name !== ''), ['Limited']);
 });
 test('Ablauf: Browserstartfehler wird als Ergebnis geliefert', async () => {
   const result = await new PhilosophyBot({ verbose: false }, async () => { throw new Error('Browserstart fehlgeschlagen'); }).run();
@@ -157,9 +181,9 @@ test('Ablauf: Browserstartfehler wird als Ergebnis geliefert', async () => {
   assert.equal(result.totalHops, 0);
   assert.match(result.errorMessage!, /Browserstart/);
 });
-test('Konfiguration: ungültige Limits und leeres Ziel ablehnen', () => {
+test('Konfiguration: ungültige Limits und nicht unterstützte Startsprache ablehnen', () => {
   for (const maxSteps of [-1, 1.5, NaN, Infinity]) assert.throws(() => new PhilosophyBot({ maxSteps }));
-  assert.throws(() => new PhilosophyBot({ target: '  ' }));
+  assert.throws(() => new PhilosophyBot({ startUrl: 'https://example.com/wiki/Philosophie' }));
 });
 
 test('Linkregel: absolute und protokollrelative Artikel derselben Sprache', async () => {
@@ -198,9 +222,10 @@ test('Ablauf: n=0 besucht nur die Anfangsseite und folgt keinem Link', async () 
   assert.equal(result.steps[0].step, 0);
   assert.equal(requests.includes('Middle'), false);
 });
-test('Ablauf: Philosophie im Titel genügt auch bei n=0', async () => {
+test('Ablauf: Philosophie im Titel genügt auch bei n=0 nicht', async () => {
   const result = await run('Target', { maxSteps: 0 });
-  assert.equal(result.success, true);
+  assert.equal(result.success, false);
+  assert.equal(result.terminationReason, 'MAX_STEPS_EXCEEDED');
   assert.equal(result.totalHops, 0);
   assert.equal(result.steps[0].title, 'Objekt (Philosophie)');
 });
